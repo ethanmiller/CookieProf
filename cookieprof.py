@@ -31,17 +31,30 @@ TIMEOUT = 10 # seconds
 
 class PollWindow(object):
     def __init__(self, site, win, opts):
-        self.cookiejar = CookieJar()
-        self.sess_agent = CookieAgent(Agent(reactor), self.cookiejar)
+        self.session = opts.session
         self.site = site
         self.stats = StatTracker(interesting_key=opts.interesting_cookie)
         self.win = win
+        if self.session:
+            if opts.sess_hook is not None:
+                self.hook = opts.sess_hook.split(':')
+                # flag to figure out if we need to catch a particular cookie
+                self.hook_ok = False
+            else:
+                self.hook = ('', '')
+                self.hook_ok = True
+            self.sess_cook = CookieJar()
+            self.sess_agent = CookieAgent(Agent(reactor), self.sess_cook)
+        self.update_view() # once as a placeholder
         self.sched_call()
+        if self.session:
+            self.sess_sched_call()
 
     def sched_call(self):
+        ''' session-less agent, recreated the cookie jar each time it's
+        scheduled'''
         now = datetime.now()
         self.last_call = now
-        # session-less agent
         cjar = CookieJar()
         agent = CookieAgent(Agent(reactor), cjar)
         self.r = agent.request('GET', self.site)
@@ -51,7 +64,27 @@ class PollWindow(object):
             calldt=now
         )
         self.r.addErrback(self.cbResponse)
-        self.update_view()
+
+    def sess_sched_call(self):
+        ''' session-ed agent, reuse the existing cookie-jar '''
+        now = datetime.now()
+        self.last_call = now
+        cjar, agent = self.get_sess_cookie()
+        self.sr = agent.request('GET', self.site)
+        self.sr.addCallback(
+            self.cbSessResponse,
+            cjar=cjar,
+            calldt=now
+        )
+        self.r.addErrback(self.cbResponse)
+
+    def get_sess_cookie(self):
+        ''' Returns session cookie and agent, checks to see if sess_hook
+        criteria is met '''
+        if not self.hook_ok:
+            # examine existing cookie - might meet criteria
+            pass
+        return self.sess_cook, self.sess_agent
 
     def update_view(self):
         self.win.addstr(0, 0, self.site)
@@ -76,9 +109,17 @@ class PollWindow(object):
             return
         # update stats
         self.stats.hit(kwargs['calldt'], kwargs['cjar'])
-        # if we're "sessioned" reset cookie jar here
-        # self.cookiejar = cjar
+        self.update_view()
         self.sched_call() # continuously call
+
+    def cbSessResponse(self, response, **kwargs):
+        if 'cjar' not in kwargs.keys():
+            return
+        # update stats
+        headers = dict(response.headers.getAllRawHeaders())
+        self.stats.hit(kwargs['calldt'], cook=kwargs['cjar'], headr=headers)
+        self.update_view()
+        self.sess_sched_call() # continuously call
 
 class StatTracker():
     def __init__(self, interesting_key=None):
@@ -89,7 +130,7 @@ class StatTracker():
         self.long_gap_dt = None
         self.longest_gap = 0.0
 
-    def hit(self, reqdt, cook=None):
+    def hit(self, reqdt, cook=None, headr=None):
         ''' A request came in, collect relevant stats '''
         self.responses += 1
         # First timing related stats
@@ -102,7 +143,7 @@ class StatTracker():
         self.gaps.append(gap)
         self.avg_gap = sum(self.gaps) / len(self.gaps)
         # Cookie stats
-        self.cstats.hit(cook)
+        self.cstats.hit(cook, headr)
 
     def __str__(self):
         if self.long_gap_dt is None:
@@ -118,21 +159,36 @@ class StatTracker():
             str(self.cstats)
         ))
 
-class CookieTracker(dict):
+class CookieTracker():
     def __init__(self, interesting_key):
         self.ikey = interesting_key
+        # track sessioned keys identically, but separately
+        self.no_sess = {}
+        self.sess = {}
+        self.set_cookies = {}
 
-    def hit(self, cook):
+    def hit(self, cook, headr=None):
         if cook is None:
             return
+        d = self.no_sess
+        if headr is not None:
+            d = self.sess
         for c in cook:
-            stats = self.setdefault(c.name, {})
+            stats = d.setdefault(c.name, {})
             hits = stats.setdefault(c.value, [])
             hits.append(datetime.now())
 
     def __str__(self):
+        ret = ['---- No Session ----']
+        ret.extend(self.report(self.no_sess))
+        if self.sess:
+            ret.append('---- Session ----')
+            ret.extend(self.report(self.sess))
+        return '\n'.join(ret)
+
+    def report(self, dat):
         ret = []
-        for kkey, vkey in self.iteritems():
+        for kkey, vkey in dat.iteritems():
             if self.ikey and kkey != self.ikey:
                 continue
             ret.append('Cookie: %s' % kkey)
@@ -146,18 +202,18 @@ class CookieTracker(dict):
                     '  - %s hits (%s%%)' % (val_hits, round(perc, 1)),
                     '  - last seen %s' % last_seen
                 ])
-        return '\n'.join(ret)
+        return ret
 
 
 if __name__=='__main__':
     usage = "usage: %prog [options] URL [URL ...]"
     parser = OptionParser(usage=usage)
     parser.add_option(
-        "-c",
-        "--cookie",
+        '-c',
+        '--cookie',
         type='string',
         dest='interesting_cookie',
-        help='Cookie of interest: Which cookie key to track unique values for'
+        help='Which cookie key to track unique values for'
     )
     parser.add_option(
         '-f',
@@ -165,12 +221,23 @@ if __name__=='__main__':
         type='string',
         dest='log_file',
         default='cookieprof.log',
-        help='Output file: File to log stats after session'
+        help='File to log stats after session'
     )
-    # options:
-    # -s session 'will save set-cookie contents, and send back for tracking a
-    #            'session. Will then track new set-cookie responses'
-    # -h session-hook 'which key:value to key off of to start session tracking'
+    parser.add_option(
+        '-s',
+        '--session',
+        dest='session',
+        action='store_true',
+        help=('Will save set-cookie contents, and send back for tracking a '
+              'session. Will then track new set-cookie responses')
+    )
+    parser.add_option(
+        '-k',
+        '--session-hook',
+        type='string',
+        dest='sess_hook',
+        help='Which key:value to key off of to start session tracking'
+    )
     opts, urls = parser.parse_args()
     if len(urls) == 0:
         parser.error('Must give us at least one URL')
@@ -180,7 +247,7 @@ if __name__=='__main__':
     try:
         curses.curs_set(0)     # no annoying mouse cursor
     except curses.error:
-        pass # meh
+        pass # encountered this in osx default terminal
     col_width = cols / len(urls)
     col_avail = cols
     col_offs = 0
