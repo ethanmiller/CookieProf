@@ -21,51 +21,103 @@ Reporting goals:
       http://twistedmatrix.com/documents/current/web/howto/client.html
 """
 import curses, signal
+from datetime import datetime
+from cookielib import CookieJar
 from twisted.internet import reactor
-from twisted.web.client import Agent
-from twisted.web.http_headers import Headers
+from twisted.web.client import Agent, CookieAgent
+
+# dict keys as their own documentation
+KY_NS_TOTAL = 'no session: total responses, just a count'
+KY_NS_PERCOOK = 'no session: timestamp for unique cookie value responses'
+KY_NS_LAGS = 'no session: time till response, includes timestamp'
+KY_S_LAGS = 'session: time till response, includes timestamp'
+KY_S_SETCOOKIE = 'session: timestamped of server response w/ setcookie'
+
 
 class PollWindow(object):
     def __init__(self, site, win):
-        self.agent = Agent(reactor)
+        self.cookiejar = CookieJar()
+        self.agent = CookieAgent(Agent(reactor), self.cookiejar)
         self.site = site
-        self.dat = 0
+        self.stat = StatTracker()
         self.win = win
         self.sched_call()
 
     def sched_call(self):
-        self.d = self.agent.request(
-            'GET', self.site,
-            Headers({'User-Agent': ['Twisted Web Client Example']}),
-            None)
-        self.d.addCallback(self.cbResponse)
-        self.d.addErrback(self.cbResponse)
+        self.r = self.agent.request('GET', self.site)
+        self.r.addCallback(
+            self.cbResponse,
+            cjar=self.cookiejar,
+            calldt=datetime.now()
+        )
+        self.r.addErrback(self.cbResponse)
         self.update_view()
 
     def update_view(self):
         self.win.addstr(0, 0, self.site)
-        self.win.addstr(1, 0, str(self.dat))
+        self.win.addstr(1, 0, str(self.stat))
         self.win.refresh()
 
     def cbError(self, response):
         pass
 
-    def cbResponse(self, response):
+    def cbResponse(self, response, **kwargs):
+        if 'cjar' not in kwargs.keys():
+            return
         # update stats
-        self.dat += 1
+        self.stat.hit(kwargs['cjar'], kwargs['calldt'])
+        # if we're "sessioned" reset cookie jar here
+        # self.cookiejar = cjar
         self.sched_call() # continuously call
+
+class StatTracker():
+    def __init__(self, interesting_key=None):
+        self.ikey = interesting_key
+        self.responses = 0
+        self.gaps = []
+        self.avg_gap = 0.0
+        self.long_gap_dt = None
+        self.longest_gap = 0.0
+
+    def hit(self, cook, reqdt):
+        ''' A request came in, collect relevant stats '''
+        self.responses += 1
+        # First timing related stats
+        respdt = datetime.now()
+        gap_delt = respdt - reqdt
+        gap = gap_delt.seconds * 1.0
+        if gap > self.longest_gap:
+            self.long_gap_dt = reqdt
+            self.longest_gap = gap
+        self.gaps.append(gap)
+        self.avg_gap = sum(self.gaps) / len(self.gaps)
+        # Cookie stats
+        # ...
+
+    def __str__(self):
+        return '\n'.join((
+            'Total hits: %s' % self.responses,
+            'Average response time: %s' % round(self.avg_gap, 2),
+            'Slowest response time: %s' % round(self.longest_gap, 2),
+            'Slowest response start: %s' % self.long_gap_dt
+        ))
+
 
 if __name__=='__main__':
     urls = ['https://www.pgevendorrebates.com',
             'https://www.bceincentives.com',
             'https://www.csithermal.com']
+    # options:
+    # -c Cookie key of interest 'which key to track unique values for'
+    # -f Output file 'file to log stats after session'
+    # -s session 'will save set-cookie contents, and send back for tracking a
+    #            'session. Will then track new set-cookie responses'
+    # -h session-hook 'which key:value to key off of to start session tracking'
 
     whole = curses.initscr()
     rows, cols = whole.getmaxyx()
     try:
         curses.curs_set(0)     # no annoying mouse cursor
-        #curses.noecho()
-        #curses.cbreak()
     except curses.error:
         pass # meh
     col_width = cols / len(urls)
@@ -84,7 +136,7 @@ if __name__=='__main__':
     def fin_callback(signum, stackframe):
         log = open('log.txt', 'w')
         for p in polls:
-            log.write('%s : %s\n' % (p.site, p.dat))
+            log.write('~~ %s ~~\n%s\n\n' % (p.site, p.stat))
         reactor.stop()
         curses.endwin()
     signal.signal(signal.SIGINT, fin_callback)
