@@ -21,6 +21,7 @@ Reporting goals:
       http://twistedmatrix.com/documents/current/web/howto/client.html
 """
 import curses, signal
+from optparse import OptionParser
 from datetime import datetime
 from cookielib import CookieJar
 from twisted.internet import reactor
@@ -29,14 +30,13 @@ from twisted.web.client import Agent, CookieAgent
 TIMEOUT = 10 # seconds
 
 class PollWindow(object):
-    def __init__(self, site, win):
+    def __init__(self, site, win, opts):
         self.cookiejar = CookieJar()
         self.sess_agent = CookieAgent(Agent(reactor), self.cookiejar)
         self.site = site
-        self.stats = StatTracker(interesting_key='ARPT')
+        self.stats = StatTracker(interesting_key=opts.interesting_cookie)
         self.win = win
         self.sched_call()
-        self.last_call = datetime.now()
 
     def sched_call(self):
         now = datetime.now()
@@ -150,15 +150,30 @@ class CookieTracker(dict):
 
 
 if __name__=='__main__':
-    urls = ['https://www.pgevendorrebates.com',
-            'https://www.bceincentives.com',
-            'https://www.csithermal.com']
+    usage = "usage: %prog [options] URL [URL ...]"
+    parser = OptionParser(usage=usage)
+    parser.add_option(
+        "-c",
+        "--cookie",
+        type='string',
+        dest='interesting_cookie',
+        help='Cookie of interest: Which cookie key to track unique values for'
+    )
+    parser.add_option(
+        '-f',
+        '--log-file',
+        type='string',
+        dest='log_file',
+        default='cookieprof.log',
+        help='Output file: File to log stats after session'
+    )
     # options:
-    # -c Cookie key of interest 'which key to track unique values for'
-    # -f Output file 'file to log stats after session'
     # -s session 'will save set-cookie contents, and send back for tracking a
     #            'session. Will then track new set-cookie responses'
     # -h session-hook 'which key:value to key off of to start session tracking'
+    opts, urls = parser.parse_args()
+    if len(urls) == 0:
+        parser.error('Must give us at least one URL')
 
     whole = curses.initscr()
     rows, cols = whole.getmaxyx()
@@ -176,7 +191,7 @@ if __name__=='__main__':
         col_avail -= width
         win = curses.newwin(rows, width, 0, col_offs)
         win.addstr(0, 0, u)
-        polls.append(PollWindow(u, win))
+        polls.append(PollWindow(u, win, opts))
         col_offs += width
 
     # Admittedly goofy timeout handling :(
@@ -187,7 +202,7 @@ if __name__=='__main__':
     reactor.callLater(TIMEOUT, run_timeouts)
 
     def fin_callback(signum, stackframe):
-        log = open('log.txt', 'w')
+        log = open(opts.log_file, 'w')
         for p in polls:
             log.write('~~ %s ~~\n%s\n\n' % (p.site, p.stats))
         reactor.stop()
