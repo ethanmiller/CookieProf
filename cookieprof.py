@@ -27,20 +27,13 @@ from twisted.internet import reactor
 from twisted.web.client import Agent, CookieAgent
 
 TIMEOUT = 10 # seconds
-# dict keys as their own documentation
-KY_NS_TOTAL = 'no session: total responses, just a count'
-KY_NS_PERCOOK = 'no session: timestamp for unique cookie value responses'
-KY_NS_LAGS = 'no session: time till response, includes timestamp'
-KY_S_LAGS = 'session: time till response, includes timestamp'
-KY_S_SETCOOKIE = 'session: timestamped of server response w/ setcookie'
-
 
 class PollWindow(object):
     def __init__(self, site, win):
         self.cookiejar = CookieJar()
-        self.agent = CookieAgent(Agent(reactor), self.cookiejar)
+        self.sess_agent = CookieAgent(Agent(reactor), self.cookiejar)
         self.site = site
-        self.stats = StatTracker()
+        self.stats = StatTracker(interesting_key='ARPT')
         self.win = win
         self.sched_call()
         self.last_call = datetime.now()
@@ -48,10 +41,13 @@ class PollWindow(object):
     def sched_call(self):
         now = datetime.now()
         self.last_call = now
-        self.r = self.agent.request('GET', self.site)
+        # session-less agent
+        cjar = CookieJar()
+        agent = CookieAgent(Agent(reactor), cjar)
+        self.r = agent.request('GET', self.site)
         self.r.addCallback(
             self.cbResponse,
-            cjar=self.cookiejar,
+            cjar=cjar,
             calldt=now
         )
         self.r.addErrback(self.cbResponse)
@@ -133,14 +129,17 @@ class CookieTracker(dict):
     def __str__(self):
         ret = []
         for kkey, vkey in self.iteritems():
+            if self.ikey and kkey != self.ikey:
+                continue
             ret.append('Cookie: %s' % kkey)
             tot_hits = sum([len(x) for x in vkey.values()])
             for kval, vval in vkey.iteritems():
                 val_hits = len(vval)
                 last_seen = vval[-1]
+                perc = 100*((val_hits*1.0)/tot_hits)
                 ret.extend([
                     ' - %s' % kval,
-                    '  - %s hits (%s%%)' % (val_hits, 100*(val_hits/tot_hits)),
+                    '  - %s hits (%s%%)' % (val_hits, round(perc, 1)),
                     '  - last seen at %s' % last_seen
                 ])
         return '\n'.join(ret)
@@ -180,8 +179,8 @@ if __name__=='__main__':
     def run_timeouts():
         for p in polls:
             p.timeout()
-        reactor.callLater(10, run_timeouts)
-    reactor.callLater(10, run_timeouts)
+        reactor.callLater(TIMEOUT, run_timeouts)
+    reactor.callLater(TIMEOUT, run_timeouts)
 
     def fin_callback(signum, stackframe):
         log = open('log.txt', 'w')
