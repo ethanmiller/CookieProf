@@ -20,8 +20,7 @@ Reporting goals:
 
       http://twistedmatrix.com/documents/current/web/howto/client.html
 """
-import curses
-
+import curses, signal
 from twisted.internet import reactor
 from twisted.web.client import Agent
 from twisted.web.http_headers import Headers
@@ -32,7 +31,6 @@ class PollWindow(object):
         self.site = site
         self.dat = 0
         self.win = win
-        self.log = open('log.txt', 'w')
         self.sched_call()
 
     def sched_call(self):
@@ -45,7 +43,6 @@ class PollWindow(object):
         self.update_view()
 
     def update_view(self):
-        #self.log.write('upd %s\n' % self.site)
         self.win.addstr(0, 0, self.site)
         self.win.addstr(1, 0, str(self.dat))
         self.win.refresh()
@@ -60,19 +57,35 @@ class PollWindow(object):
 
 if __name__=='__main__':
     urls = ['https://www.pgevendorrebates.com',
-            'https://www.bceincentives.com', 'http://www.csithermal.com']
+            'https://www.bceincentives.com',
+            'https://www.csithermal.com']
 
     whole = curses.initscr()
     rows, cols = whole.getmaxyx()
-    curses.curs_set(0)     # no annoying mouse cursor
+    try:
+        curses.curs_set(0)     # no annoying mouse cursor
+        #curses.noecho()
+        #curses.cbreak()
+    except curses.error:
+        pass # meh
     col_width = cols / len(urls)
     col_avail = cols
     col_offs = 0
+    polls = []
+
     for u in urls:
         width = min(col_width, col_avail)
         col_avail -= width
         win = curses.newwin(rows, width, 0, col_offs)
         win.addstr(0, 0, u)
-        p = PollWindow(u, win)
+        polls.append(PollWindow(u, win))
         col_offs += width
+
+    def fin_callback(signum, stackframe):
+        log = open('log.txt', 'w')
+        for p in polls:
+            log.write('%s : %s\n' % (p.site, p.dat))
+        reactor.stop()
+        curses.endwin()
+    signal.signal(signal.SIGINT, fin_callback)
     reactor.run()
