@@ -105,11 +105,15 @@ class StatTracker():
         self.cstats.hit(cook)
 
     def __str__(self):
+        if self.long_gap_dt is None:
+            lgap = '-'
+        else:
+            lgap = self.long_gap_dt.strftime('%m/%d %H:%M:%S')
         return '\n'.join((
             'Total hits: %s' % self.responses,
             'Average response time: %s' % round(self.avg_gap, 2),
             'Slowest response time: %s' % round(self.longest_gap, 2),
-            'Slowest response start: %s' % self.long_gap_dt,
+            'Slowest response start: %s' % lgap,
             '',
             str(self.cstats)
         ))
@@ -135,12 +139,12 @@ class CookieTracker(dict):
             tot_hits = sum([len(x) for x in vkey.values()])
             for kval, vval in vkey.iteritems():
                 val_hits = len(vval)
-                last_seen = vval[-1]
+                last_seen = vval[-1].strftime('%m/%d %H:%M:%S')
                 perc = 100*((val_hits*1.0)/tot_hits)
                 ret.extend([
                     ' - %s' % kval,
                     '  - %s hits (%s%%)' % (val_hits, round(perc, 1)),
-                    '  - last seen at %s' % last_seen
+                    '  - last seen %s' % last_seen
                 ])
         return '\n'.join(ret)
 
