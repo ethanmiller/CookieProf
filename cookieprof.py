@@ -45,7 +45,7 @@ class PollWindow(object):
                 self.hook_ok = True
             self.sess_cook = CookieJar()
             self.sess_agent = CookieAgent(Agent(reactor), self.sess_cook)
-        self.update_view() # once as a placeholder
+        self.update_view(False) # once as a placeholder
         self.sched_call()
         if self.session:
             self.sess_sched_call()
@@ -86,7 +86,10 @@ class PollWindow(object):
             pass
         return self.sess_cook, self.sess_agent
 
-    def update_view(self):
+    def update_view(self, redir):
+        if redir:
+            # clear window, one line warning follows
+            self.win.clear()
         self.win.addstr(0, 0, self.site)
         self.win.addstr(1, 0, str(self.stats))
         self.win.refresh()
@@ -116,13 +119,14 @@ class PollWindow(object):
 
     def hit(self, response, sess, **kwargs):
         headers = dict(response.headers.getAllRawHeaders())
+        is_redir = response.code==301
         self.stats.hit(
             kwargs['calldt'],
             cook=kwargs['cjar'],
             sess=sess,
             headr=headers,
-            redir=response.code==301)
-        self.update_view()
+            redir=is_redir)
+        self.update_view(is_redir)
 
 
 class StatTracker():
@@ -133,10 +137,13 @@ class StatTracker():
         self.avg_gap = 0.0
         self.long_gap_dt = None
         self.longest_gap = 0.0
+        self.redir_to = None
 
     def hit(self, reqdt, cook=None, sess=False, headr=None, redir=False):
         ''' A request came in, collect relevant stats '''
         self.responses += 1
+        if redir:
+            self.redir_to = headr['Location']
         # First timing related stats
         respdt = datetime.now()
         gap_delt = respdt - reqdt
@@ -147,9 +154,12 @@ class StatTracker():
         self.gaps.append(gap)
         self.avg_gap = sum(self.gaps) / len(self.gaps)
         # Cookie stats
-        self.cstats.hit(cook, headr, sess)
+        if not redir:
+            self.cstats.hit(cook, headr, sess)
 
     def __str__(self):
+        if self.redir_to is not None:
+            return '!! Redirection to %s' % self.redir_to
         if self.long_gap_dt is None:
             lgap = '-'
         else:
