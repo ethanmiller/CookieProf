@@ -21,6 +21,7 @@ Reporting goals:
       http://twistedmatrix.com/documents/current/web/howto/client.html
 """
 import curses, signal
+from urlparse import urlparse
 from optparse import OptionParser
 from datetime import datetime
 from cookielib import CookieJar
@@ -30,10 +31,10 @@ from twisted.web.client import Agent, CookieAgent
 TIMEOUT = 10 # seconds
 
 class PollWindow(object):
-    def __init__(self, site, win, opts):
+    def __init__(self, site, win, cook, opts):
         self.session = opts.session
         self.site = site
-        self.stats = StatTracker(interesting_key=opts.interesting_cookie)
+        self.stats = StatTracker(interesting_key=cook)
         self.win = win
         if self.session:
             if opts.sess_hook is not None:
@@ -203,7 +204,7 @@ class CookieTracker():
     def report(self, dat):
         ret = []
         for kkey, vkey in dat.iteritems():
-            if self.ikey and kkey != self.ikey:
+            if kkey != self.ikey:
                 continue
             ret.append('Cookie: %s' % kkey)
             tot_hits = sum([len(x) for x in vkey.values()])
@@ -218,17 +219,16 @@ class CookieTracker():
                 ])
         return ret
 
+def valid_url(u):
+    '''We're just going to expect a scheme and a netloc, and call that a good
+    URL '''
+    r = urlparse(u)
+    return '' not in [r.scheme, r.netloc]
+
 
 if __name__=='__main__':
-    usage = "usage: %prog [options] URL [URL ...]"
+    usage = "usage: %prog [options] COOKIE URL [URL ...]"
     parser = OptionParser(usage=usage)
-    parser.add_option(
-        '-c',
-        '--cookie',
-        type='string',
-        dest='interesting_cookie',
-        help='Which cookie key to track unique values for'
-    )
     parser.add_option(
         '-f',
         '--log-file',
@@ -252,9 +252,20 @@ if __name__=='__main__':
         dest='sess_hook',
         help='Which key:value to key off of to start session tracking'
     )
-    opts, urls = parser.parse_args()
-    if len(urls) == 0:
-        parser.error('Must give us at least one URL')
+    opts, args = parser.parse_args()
+
+    if len(args) < 2:
+        parser.error('Must give us one COOKIE key and at least one URL')
+
+    cook, urls = args[:1][0], args[1:]
+    if valid_url(cook):
+        parser.error('Your COOKIE argument looks a lot like a URL, I\'m '
+                     'guessing you just forgot to add the COOKIE')
+
+    for u in urls:
+        if not valid_url(u):
+            parser.error('%s doesn\'t look like a valid URL. Please include '
+                         'the scheme (eg. http://)' % u)
 
     whole = curses.initscr()
     rows, cols = whole.getmaxyx()
@@ -272,7 +283,7 @@ if __name__=='__main__':
         col_avail -= width
         win = curses.newwin(rows, width, 0, col_offs)
         win.addstr(0, 0, u)
-        polls.append(PollWindow(u, win, opts))
+        polls.append(PollWindow(u, win, cook, opts))
         col_offs += width
 
     # Admittedly goofy timeout handling :(
