@@ -139,6 +139,7 @@ class StatTracker():
         self.long_gap_dt = None
         self.longest_gap = 0.0
         self.redir_to = None
+        self.full_print = False
 
     def hit(self, reqdt, cook=None, sess=False, headr=None, redir=False):
         ''' A request came in, collect relevant stats '''
@@ -165,6 +166,7 @@ class StatTracker():
             lgap = '-'
         else:
             lgap = self.long_gap_dt.strftime('%m/%d %H:%M:%S')
+        self.cstats.full_print = self.full_print
         return '\n'.join((
             'Total hits: %s' % self.responses,
             'Average response time: %s' % round(self.avg_gap, 2),
@@ -181,6 +183,7 @@ class CookieTracker():
         self.no_sess = {}
         self.sess = {}
         self.set_cookies = {}
+        self.full_print = False
 
     def hit(self, cook, headr=None, sess=False):
         if cook is None:
@@ -208,7 +211,11 @@ class CookieTracker():
                 continue
             ret.append('Cookie: %s' % kkey)
             tot_hits = sum([len(x) for x in vkey.values()])
-            for kval, vval in vkey.iteritems():
+            items = vkey.items()
+            if not self.full_print and len(items) > 3:
+                ret.append('(%s more to review in log)' % (len(items) - 3))
+                items = items[-3:]
+            for kval, vval in items:
                 val_hits = len(vval)
                 last_seen = vval[-1].strftime('%m/%d %H:%M:%S')
                 perc = 100*((val_hits*1.0)/tot_hits)
@@ -296,6 +303,7 @@ if __name__=='__main__':
     def fin_callback(signum, stackframe):
         log = open(opts.log_file, 'w')
         for p in polls:
+            p.stats.full_print = True
             log.write('~~ %s ~~\n%s\n\n' % (p.site, p.stats))
         reactor.stop()
         curses.endwin()
