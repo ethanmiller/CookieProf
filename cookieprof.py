@@ -120,7 +120,7 @@ class PollWindow(object):
 
     def hit(self, response, sess, **kwargs):
         headers = dict(response.headers.getAllRawHeaders())
-        is_redir = response.code==301
+        is_redir = response.code in range(300, 308)
         self.stats.hit(
             kwargs['calldt'],
             cook=kwargs['cjar'],
