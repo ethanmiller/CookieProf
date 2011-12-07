@@ -105,21 +105,25 @@ class PollWindow(object):
             self.sched_call()
 
     def cbResponse(self, response, **kwargs):
-        if 'cjar' not in kwargs.keys():
-            return
-        # update stats
-        self.stats.hit(kwargs['calldt'], kwargs['cjar'])
-        self.update_view()
-        self.sched_call() # continuously call
+        if 'cjar' in kwargs.keys():
+            self.hit(response, False, **kwargs)
+            self.sched_call() # continuously call
 
     def cbSessResponse(self, response, **kwargs):
-        if 'cjar' not in kwargs.keys():
-            return
-        # update stats
+        if 'cjar' in kwargs.keys():
+            self.hit(response, True, **kwargs)
+            self.sess_sched_call() # continuously call
+
+    def hit(self, response, sess, **kwargs):
         headers = dict(response.headers.getAllRawHeaders())
-        self.stats.hit(kwargs['calldt'], cook=kwargs['cjar'], headr=headers)
+        self.stats.hit(
+            kwargs['calldt'],
+            cook=kwargs['cjar'],
+            sess=sess,
+            headr=headers,
+            redir=response.code==301)
         self.update_view()
-        self.sess_sched_call() # continuously call
+
 
 class StatTracker():
     def __init__(self, interesting_key=None):
@@ -130,7 +134,7 @@ class StatTracker():
         self.long_gap_dt = None
         self.longest_gap = 0.0
 
-    def hit(self, reqdt, cook=None, headr=None):
+    def hit(self, reqdt, cook=None, sess=False, headr=None, redir=False):
         ''' A request came in, collect relevant stats '''
         self.responses += 1
         # First timing related stats
@@ -143,7 +147,7 @@ class StatTracker():
         self.gaps.append(gap)
         self.avg_gap = sum(self.gaps) / len(self.gaps)
         # Cookie stats
-        self.cstats.hit(cook, headr)
+        self.cstats.hit(cook, headr, sess)
 
     def __str__(self):
         if self.long_gap_dt is None:
@@ -167,11 +171,11 @@ class CookieTracker():
         self.sess = {}
         self.set_cookies = {}
 
-    def hit(self, cook, headr=None):
+    def hit(self, cook, headr=None, sess=False):
         if cook is None:
             return
         d = self.no_sess
-        if headr is not None:
+        if sess:
             d = self.sess
         for c in cook:
             stats = d.setdefault(c.name, {})
