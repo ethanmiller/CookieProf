@@ -30,22 +30,59 @@ from twisted.web.client import Agent, CookieAgent
 
 TIMEOUT = 10 # seconds
 
+class Requestor(object):
+    def __init__(self, sess, site, hook):
+        self.session = sess
+        self.site = site
+        self.hook = ('', '')
+        self.hook_ok = True
+        if self.session:
+            self.sess_cook, self.sess_agent = self.get_fresh()
+            if hook is not None:
+                self.hook = hook.split(':')
+                # flag to figure out if we need to catch a particular cookie
+                self.hook_ok = False
+
+    def get_fresh(self):
+        cook = CookieJar()
+        agnt = CookieAgent(Agent(reactor), cook)
+        return cook, agnt
+
+    def get_stale(self):
+        if self.session and not self.hook_ok:
+            for c in self.sess_cook:
+                if [c.name, c.value] == self.hook:
+                    # Satisfied hook condition, keep this as session
+                    self.hook_ok = True
+                    break
+            else:
+                # NOTE: this is an else for the for loop
+                # Haven't found hook, reset cookie jar + agent
+                self.sess_cook, self.sess_agent = self.get_fresh()
+        return self.sess_cook, self.sess_agent
+
+    def request(self, call_back, err_back, dt):
+        if self.session:
+            cjar, agent = self.get_stale()
+        else:
+            cjar, agent = self.get_fresh()
+        self.r = agent.request('GET', self.site)
+        self.r.addCallback(
+            call_back,
+            cjar=cjar,
+            calldt=dt
+        )
+        self.r.addErrback(err_back)
+
 class PollWindow(object):
     def __init__(self, site, win, cook, opts):
         self.session = opts.session
         self.site = site
         self.stats = StatTracker(interesting_key=cook)
         self.win = win
+        self.q = Requestor(False, site, opts.sess_hook)
         if self.session:
-            if opts.sess_hook is not None:
-                self.hook = opts.sess_hook.split(':')
-                # flag to figure out if we need to catch a particular cookie
-                self.hook_ok = False
-            else:
-                self.hook = ('', '')
-                self.hook_ok = True
-            self.sess_cook = CookieJar()
-            self.sess_agent = CookieAgent(Agent(reactor), self.sess_cook)
+            self.sq = Requestor(True, site, opts.sess_hook)
         self.update_view(False) # once as a placeholder
         self.sched_call()
         if self.session:
@@ -56,44 +93,13 @@ class PollWindow(object):
         scheduled'''
         now = datetime.now()
         self.last_call = now
-        cjar = CookieJar()
-        agent = CookieAgent(Agent(reactor), cjar)
-        self.r = agent.request('GET', self.site)
-        self.r.addCallback(
-            self.cbResponse,
-            cjar=cjar,
-            calldt=now
-        )
-        self.r.addErrback(self.cbResponse)
+        self.q.request(self.cbResponse, self.cbError, now)
 
     def sess_sched_call(self):
         ''' session-ed agent, reuse the existing cookie-jar '''
         now = datetime.now()
         self.last_call = now
-        cjar, agent = self.get_sess_cookie()
-        self.sr = agent.request('GET', self.site)
-        self.sr.addCallback(
-            self.cbSessResponse,
-            cjar=cjar,
-            calldt=now
-        )
-        self.r.addErrback(self.cbResponse)
-
-    def get_sess_cookie(self):
-        ''' Returns session cookie and agent, checks to see if sess_hook
-        criteria is met '''
-        if not self.hook_ok:
-            # examine existing cookie - might meet criteria
-            pass
-        return self.sess_cook, self.sess_agent
-
-    def update_view(self, redir):
-        if redir:
-            # clear window, one line warning follows
-            self.win.clear()
-        self.win.addstr(0, 0, self.site)
-        self.win.addstr(1, 0, str(self.stats))
-        self.win.refresh()
+        self.sq.request(self.cbSessResponse, self.cbError, now)
 
     def cbError(self, response):
         pass
@@ -121,6 +127,9 @@ class PollWindow(object):
     def hit(self, response, sess, **kwargs):
         headers = dict(response.headers.getAllRawHeaders())
         is_redir = response.code in range(300, 308)
+        if sess and not self.sq.hook_ok:
+            # Wont count this, as the session is waiting for hook
+            return
         self.stats.hit(
             kwargs['calldt'],
             cook=kwargs['cjar'],
@@ -129,6 +138,13 @@ class PollWindow(object):
             redir=is_redir)
         self.update_view(is_redir)
 
+    def update_view(self, redir):
+        if redir:
+            # clear window, one line warning follows
+            self.win.clear()
+        self.win.addstr(0, 0, self.site)
+        self.win.addstr(1, 0, str(self.stats))
+        self.win.refresh()
 
 class StatTracker():
     def __init__(self, interesting_key=None):
@@ -241,7 +257,7 @@ if __name__=='__main__':
         '--log-file',
         type='string',
         dest='log_file',
-        default='cookieprof.log',
+        default='results.log',
         help='File to log stats after session'
     )
     parser.add_option(
