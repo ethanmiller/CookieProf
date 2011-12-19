@@ -98,19 +98,23 @@ class PollWindow(object):
     def sess_sched_call(self):
         ''' session-ed agent, reuse the existing cookie-jar '''
         now = datetime.now()
-        self.last_call = now
+        self.slast_call = now
         self.sq.request(self.cbSessResponse, self.cbError, now)
 
     def cbError(self, response):
         pass
 
     def timeout(self):
+        self._timeout(self.last_call, self.q)
+        self._timeout(self.slast_call, self.sq)
+
+    def _timeout(self, last, rq):
         now = datetime.now()
-        delt = now - self.last_call
+        delt = now - last
         if delt.seconds > TIMEOUT:
-            self.r.cancel()
+            rq.r.cancel()
             # log the hit (or miss rather)
-            self.stats.hit(self.last_call)
+            self.stats.hit(last)
             # and try again
             self.sched_call()
 
@@ -247,7 +251,6 @@ def valid_url(u):
     URL '''
     r = urlparse(u)
     return '' not in [r.scheme, r.netloc]
-
 
 if __name__=='__main__':
     usage = "usage: %prog [options] COOKIE URL [URL ...]"
