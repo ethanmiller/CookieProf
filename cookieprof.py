@@ -1,24 +1,7 @@
 #!/usr/bin/env python
 """
-Per ops #249 : Script to test the behavior of the rackspace Load Balancer. In
-particular we will run a DR test and take down one of the web servers to check
-the behavior of the LB.
-
-Reporting goals:
-  - For session-less requests:
-    - % of directions to each web server
-    - average lag duration until response
-    - longest lag duration, and it's timestamp (for matching against server
-      outage)
-    - longest *omission* of a given server (duration, start/end time)
-  - For session requests:
-    - average lag duration
-    - longest lag duration, and it's timestamp (for matching against server
-      outage)
-    - occurrences (timestamp) of server set-cookie response that changes web
-      server
-
-      http://twistedmatrix.com/documents/current/web/howto/client.html
+Cookie profiler: Repeatedly hits given URLs and tracks cookies, without, and
+(optionally) with a session.
 """
 import curses, signal
 from urlparse import urlparse
@@ -31,6 +14,7 @@ from twisted.web.client import Agent, CookieAgent
 TIMEOUT = 10 # seconds
 
 class Requestor(object):
+    """ Manages the session, and makes requests to the given site (URL) """
     def __init__(self, sess, site, hook):
         self.session = sess
         self.site = site
@@ -75,6 +59,7 @@ class Requestor(object):
         self.r.addErrback(err_back)
 
 class PollWindow(object):
+    """ ncurses panel that represents a given URL """
     def __init__(self, site, win, cook, opts):
         self.session = opts.session
         self.site = site
@@ -89,14 +74,14 @@ class PollWindow(object):
             self.sess_sched_call()
 
     def sched_call(self):
-        ''' session-less agent, recreated the cookie jar each time it's
-        scheduled'''
+        """ session-less agent, recreated the cookie jar each time it's
+        scheduled """
         now = datetime.now()
         self.last_call = now
         self.q.request(self.cbResponse, self.cbError, now)
 
     def sess_sched_call(self):
-        ''' session-ed agent, reuse the existing cookie-jar '''
+        """ session-ed agent, reuse the existing cookie-jar """
         now = datetime.now()
         self.slast_call = now
         self.sq.request(self.cbSessResponse, self.cbError, now)
@@ -151,6 +136,8 @@ class PollWindow(object):
         self.win.refresh()
 
 class StatTracker():
+    """ Class to keep hit count and timing data for requests, also keeps cookie
+    stats CookieTracker instance """
     def __init__(self, interesting_key=None):
         self.cstats = CookieTracker(interesting_key)
         self.responses = 0
@@ -162,7 +149,7 @@ class StatTracker():
         self.full_print = False
 
     def hit(self, reqdt, cook=None, sess=False, headr=None, redir=False):
-        ''' A request came in, collect relevant stats '''
+        """ A request came in, collect relevant stats """
         self.responses += 1
         if redir:
             self.redir_to = headr['Location']
@@ -197,6 +184,7 @@ class StatTracker():
         ))
 
 class CookieTracker():
+    """ Class to keep actual cookie stats """
     def __init__(self, interesting_key):
         self.ikey = interesting_key
         # track sessioned keys identically, but separately
@@ -269,8 +257,8 @@ class CookieTracker():
         return ret
 
 def valid_url(u):
-    '''We're just going to expect a scheme and a netloc, and call that a good
-    URL '''
+    """ We're just going to expect a scheme and a netloc, and call that a good
+    URL """
     r = urlparse(u)
     return '' not in [r.scheme, r.netloc]
 
@@ -327,6 +315,7 @@ if __name__=='__main__':
     polls = []
 
     for u in urls:
+        """ Configure ncurses panels """
         width = min(col_width, col_avail)
         col_avail -= width
         win = curses.newwin(rows, width, 0, col_offs)
@@ -342,6 +331,8 @@ if __name__=='__main__':
     reactor.callLater(TIMEOUT, run_timeouts)
 
     def fin_callback(signum, stackframe):
+        """ Hook for SIGINT (Ctrl-C) quit, writes out logged data to a log file
+        in sequence (as opposed the ncurses panel layout) """
         log = open(opts.log_file, 'w')
         for p in polls:
             p.stats.full_print = True
