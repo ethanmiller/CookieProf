@@ -210,11 +210,27 @@ class CookieTracker():
             return
         d = self.no_sess
         if sess:
+            self.set_cook_catalog(headr)
             d = self.sess
         for c in cook:
             stats = d.setdefault(c.name, {})
             hits = stats.setdefault(c.value, [])
             hits.append(datetime.now())
+
+    def set_cook_catalog(self, headr):
+        if not headr:
+            return
+        set_cooks = dict(headr).get('Set-Cookie', [])
+        if not set_cooks:
+            return
+        for set_cook in set_cooks:
+            key_val = set_cook.split('=')[:2]
+            key = key_val[0]
+            if key != self.ikey:
+                continue
+            val = key_val[1].split(';')[0]
+            seen = self.set_cookies.setdefault(key, [])
+            seen.append((val, datetime.now().strftime('%m/%d %H:%M:%S')))
 
     def __str__(self):
         ret = ['---- No Session ----']
@@ -244,6 +260,12 @@ class CookieTracker():
                     '  - %s hits (%s%%)' % (val_hits, round(perc, 1)),
                     '  - last seen %s' % last_seen
                 ])
+            if self.sess.keys():
+                ret.append('Set-Cookies:')
+                for key, vlist in self.set_cookies.iteritems():
+                    ret.append(key)
+                    for v in vlist:
+                        ret.append("%s at %s" % v)
         return ret
 
 def valid_url(u):
